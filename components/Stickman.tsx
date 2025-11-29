@@ -1,3 +1,4 @@
+
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Vector3, Group, MathUtils } from 'three';
@@ -21,12 +22,13 @@ interface StickmanProps {
   job?: 'TEACHER' | 'CASHIER';
   travelState: TravelState;
   onLog: (msg: string, type: 'normal' | 'alert') => void;
+  timeOffset: React.MutableRefObject<number>;
 }
 
 const WALK_SPEED_PARENT = 0.05;
 const WALK_SPEED_CHILD = 0.12; 
 
-export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop, school, park, store, beach, arcade, airport, isNight, job, travelState, onLog }) => {
+export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop, school, park, store, beach, arcade, airport, isNight, job, travelState, onLog, timeOffset }) => {
   const group = useRef<Group>(null);
   
   // State
@@ -37,6 +39,9 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
   const [hasToy, setHasToy] = useState(false);
   const [waitTimer, setWaitTimer] = useState(0);
   
+  // Travel Sub-state
+  const [travelStep, setTravelStep] = useState(0);
+
   // Flags for one-time checks per day/night
   const [checkedNightActivity, setCheckedNightActivity] = useState(false);
 
@@ -66,9 +71,10 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
   }, [id, role]);
 
   useFrame(({ clock }, delta) => {
-    // Shared Schedule Logic
-    const time = clock.getElapsedTime();
-    const cycleTime = time % 360; 
+    // Shared Schedule Logic - Use Offset for Warping
+    const totalSeconds = clock.getElapsedTime() + timeOffset.current;
+    // Ensure positive cycle time
+    const cycleTime = ((totalSeconds % 360) + 360) % 360; 
 
     // Handle Timers
     if (waitTimer > 0) {
@@ -80,9 +86,26 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
     if (travelState.travelerHouseId === home.id) {
         if (travelState.status === 'BOARDING') {
             if (state !== ActionState.TRAVELING && state !== ActionState.WAITING_FOR_FLIGHT) {
-                // Walk to Airport Terminal
-                setTarget(airport.terminalPos.clone().add(new Vector3(Math.random()*4, 0, Math.random()*4)));
+                // Initialize Travel Sequence
+                setTravelStep(0);
                 setState(ActionState.TRAVELING);
+                setTarget(airport.checkInPos.clone().add(new Vector3((Math.random()-0.5), 0, (Math.random()-0.5))));
+            }
+            else if (state === ActionState.TRAVELING && !target && waitTimer === 0) {
+                // Determine next step
+                if (travelStep === 0) { // Finished Check-in
+                    setWaitTimer(1.5); // Wait at desk
+                    setTravelStep(1);
+                    setTarget(airport.securityPos.clone().add(new Vector3((Math.random()-0.5), 0, (Math.random()-0.5))));
+                } 
+                else if (travelStep === 1) { // Finished Security
+                    setWaitTimer(1.5); // Wait at security
+                    setTravelStep(2);
+                    setTarget(airport.gatePos.clone().add(new Vector3((Math.random()-0.5)*3, 0, (Math.random()-0.5))));
+                }
+                else if (travelStep === 2) { // Finished Gate Walk
+                    setState(ActionState.WAITING_FOR_FLIGHT);
+                }
             }
         }
         else if (travelState.status === 'AWAY') {
@@ -104,11 +127,6 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
         else if (travelState.status === 'CRASHED') {
              // Logic handled by Scene unmounting this component, but if we persist:
              setState(ActionState.CRASHED);
-        }
-
-        // Wait at terminal if traveling and arrived
-        if (state === ActionState.TRAVELING && !target) {
-             setState(ActionState.WAITING_FOR_FLIGHT);
         }
 
         if (state === ActionState.WAITING_FOR_FLIGHT || state === ActionState.FLYING) return;
@@ -410,11 +428,14 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
                  setTarget(null);
                  setWaitTimer(3.0); 
             }
-            if (state === ActionState.WALKING || state === ActionState.TRAVELING) {
+            if (state === ActionState.WALKING) {
                  // Stop walking
                  setTarget(null);
-                 if (state === ActionState.TRAVELING) setState(ActionState.WAITING_FOR_FLIGHT);
-                 else setState(ActionState.IDLE);
+                 setState(ActionState.IDLE);
+            }
+            if (state === ActionState.TRAVELING) {
+                // Multi-step logic handled in useFrame loop logic above via setWaitTimer/setTravelStep
+                setTarget(null);
             }
         }
     }

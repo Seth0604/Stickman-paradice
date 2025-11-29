@@ -79,6 +79,9 @@ export interface ArcadeData {
 export interface AirportData {
   position: Vector3;
   terminalPos: Vector3;
+  checkInPos: Vector3;
+  securityPos: Vector3;
+  gatePos: Vector3;
   runwayStart: Vector3;
 }
 
@@ -101,4 +104,5 @@ export interface TravelState {
     status: 'IDLE' | 'BOARDING' | 'AWAY' | 'RETURNING' | 'CRASHED';
     travelerHouseId: string | null;
     flightProgress: number; // 0 to 1 for animation
+    daysAway: number;
 }

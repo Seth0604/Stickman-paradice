@@ -19,6 +19,7 @@ import { HOUSE_WIDTH, HOUSE_DEPTH, GRID_ROWS, GRID_COLS, GRID_SPACING, COLORS, S
 interface SceneProps {
   onLog: (msg: string, type: 'normal' | 'alert') => void;
   onTimeUpdate: (time: string, task: string) => void;
+  warpTrigger: { minute: number, id: number } | null;
 }
 
 // --- WASD + QE + Drag-to-Look Camera Control ---
@@ -28,7 +29,6 @@ const CameraRig = () => {
     const isDragging = useRef(false);
 
     useEffect(() => {
-        // Key Listeners
         const handleKeyDown = (e: KeyboardEvent) => {
             const key = e.key.toLowerCase();
             if (key in keys.current) keys.current[key as keyof typeof keys.current] = true;
@@ -38,7 +38,6 @@ const CameraRig = () => {
             if (key in keys.current) keys.current[key as keyof typeof keys.current] = false;
         };
         
-        // Mouse/Pointer Listeners for "Drag to Look"
         const canvas = gl.domElement;
         
         const handlePointerDown = (e: PointerEvent) => {
@@ -117,15 +116,18 @@ const CameraRig = () => {
     return null;
 }
 
-// --- Environment & Time ---
 const EnvironmentController = ({ 
     onTimeChange, 
     onTimeUpdate,
-    onMinuteChange
+    onMinuteChange,
+    warpTrigger,
+    timeOffset
 }: { 
     onTimeChange: (isNight: boolean) => void,
     onTimeUpdate: (time: string, task: string) => void,
-    onMinuteChange: (minute: number) => void
+    onMinuteChange: (minute: number) => void,
+    warpTrigger: { minute: number, id: number } | null,
+    timeOffset: React.MutableRefObject<number>
 }) => {
     const { scene } = useThree();
     const sunRef = useRef<DirectionalLight>(null);
@@ -133,32 +135,39 @@ const EnvironmentController = ({
     const [sunPos, setSunPos] = useState(new Vector3(100, 20, 100));
     const [starsFade, setStarsFade] = useState(true);
     const lastMinute = useRef(0);
+    const lastWarpId = useRef(0);
 
     useFrame(({ clock }) => {
-        const totalSeconds = clock.getElapsedTime();
-        const cycleTime = totalSeconds % 360; 
+        if (warpTrigger && warpTrigger.id !== lastWarpId.current) {
+            lastWarpId.current = warpTrigger.id;
+            const currentRaw = clock.getElapsedTime() + timeOffset.current;
+            const currentCycle = currentRaw % 360;
+            const targetCycle = (warpTrigger.minute - 1) * 60 + 1; // +1s buffer
+            
+            const diff = targetCycle - currentCycle;
+            timeOffset.current += diff;
+            lastMinute.current = -1; 
+        }
+
+        const totalSeconds = clock.getElapsedTime() + timeOffset.current;
+        const cycleTime = ((totalSeconds % 360) + 360) % 360; 
         const currentMinute = Math.floor(cycleTime / 60) + 1;
 
-        // Custom Sun Cycle:
         let isNight = false;
         let sunY = 50;
-        let fogColor = "#87ceeb"; // Sky blue
+        let fogColor = "#87ceeb"; 
 
         if (cycleTime < 60 || cycleTime >= 300) {
-            // Night
             isNight = true;
             sunY = -20;
-            fogColor = "#0f172a"; // Dark slate
+            fogColor = "#0f172a"; 
         } else if (cycleTime >= 60 && cycleTime < 90) {
-            // Dawn
-            fogColor = "#fb923c"; // Orange
+            fogColor = "#fb923c";
             sunY = 10;
         } else if (cycleTime >= 270 && cycleTime < 300) {
-            // Dusk
-            fogColor = "#c084fc"; // Purple
+            fogColor = "#c084fc"; 
             sunY = 10;
         } else {
-            // Day
             isNight = false;
             sunY = 50;
         }
@@ -168,45 +177,34 @@ const EnvironmentController = ({
         const sunX = Math.cos(dayProgress * Math.PI) * radius;
         const sunZ = Math.sin(dayProgress * Math.PI) * 20;
 
-        if (Math.floor(totalSeconds) % 2 === 0) {
+        if (Math.floor(totalSeconds) % 2 === 0 || lastMinute.current === -1) {
             setSunPos(new Vector3(sunX, sunY, sunZ));
+            if (sunRef.current) sunRef.current.position.set(sunX, sunY, sunZ);
         }
 
-        onTimeChange(isNight);
-        setStarsFade(!isNight);
-
-        // Update Fog
-        scene.fog = new Fog(fogColor, 20, 150);
-
-        if (sunRef.current && ambientRef.current) {
-            sunRef.current.position.set(sunX, sunY, sunZ);
-            sunRef.current.intensity = isNight ? 0 : 1.5; // Brighter sun
-            // Change ambient light color based on time
-            const ambientColor = isNight ? "#1e293b" : "#ffffff";
-            ambientRef.current.color.set(ambientColor);
-            ambientRef.current.intensity = isNight ? 0.2 : 0.6;
-        }
-
-        // --- Tasks ---
-        let task = "Free Time";
-        
-        if (currentMinute === 1) {
-            task = "SLEEPING / WAKING UP";
-        } else if (currentMinute === 2) {
-            task = "FREE / ARCADE / BEACH / SHOP";
-        } else if (currentMinute === 3) {
-            task = "SCHOOL / WORK / TRAVEL";
-        } else if (currentMinute === 4) {
-            task = "FREE TIME";
-        } else if (currentMinute === 5) {
-            task = "PARK / BEACH / SHOP";
-        } else if (currentMinute === 6) {
-             task = "SLEEP";
-        }
-
-        const timeString = `Minute ${currentMinute}`;
-        
         if (currentMinute !== lastMinute.current) {
+            onTimeChange(isNight);
+            setStarsFade(!isNight);
+            
+            scene.fog = new Fog(fogColor, 20, 150);
+
+            if (sunRef.current && ambientRef.current) {
+                sunRef.current.intensity = isNight ? 0 : 1.5; 
+                const ambientColor = isNight ? "#1e293b" : "#ffffff";
+                ambientRef.current.color.set(ambientColor);
+                ambientRef.current.intensity = isNight ? 0.2 : 0.6;
+            }
+
+            let task = "Free Time";
+            if (currentMinute === 1) task = "SLEEPING / WAKING UP";
+            else if (currentMinute === 2) task = "FREE / ARCADE / BEACH / SHOP";
+            else if (currentMinute === 3) task = "SCHOOL / WORK / TRAVEL";
+            else if (currentMinute === 4) task = "FREE TIME";
+            else if (currentMinute === 5) task = "PARK / BEACH / SHOP";
+            else if (currentMinute === 6) task = "SLEEP";
+
+            const timeString = `Minute ${currentMinute}`;
+            
             lastMinute.current = currentMinute;
             onTimeUpdate(timeString, task);
             onMinuteChange(currentMinute);
@@ -233,42 +231,32 @@ const EnvironmentController = ({
     );
 };
 
-// Generates Asphalt Roads and Concrete Sidewalks between grid cells
 const CityTerrain: React.FC = () => {
     const roadWidth = 8;
-    const blockSize = GRID_SPACING - roadWidth; // Size of the green patch
-    const totalWidth = GRID_COLS * GRID_SPACING;
-    const totalDepth = GRID_ROWS * GRID_SPACING;
-
-    // We render one massive road plane underneath everything, then small grass squares on top
+    const blockSize = GRID_SPACING - roadWidth;
+    
     return (
         <group position={[0, -0.05, 0]}>
-            {/* Main Asphalt Base (The Roads) */}
             <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]} receiveShadow>
                 <planeGeometry args={[500, 500]} />
-                <meshStandardMaterial color="#334155" roughness={0.8} /> {/* Slate-700 Asphalt */}
+                <meshStandardMaterial color="#334155" roughness={0.8} />
             </mesh>
 
-            {/* Grass Blocks (The Properties) */}
             {Array.from({ length: GRID_ROWS }).map((_, r) => (
                 Array.from({ length: GRID_COLS }).map((_, c) => {
                     const x = -((GRID_COLS - 1) * GRID_SPACING) / 2 + c * GRID_SPACING;
                     const z = -((GRID_ROWS - 1) * GRID_SPACING) / 2 + r * GRID_SPACING;
-                    
-                    // Sidewalk (Concrete)
                     const sidewalkSize = blockSize + 2; 
                     
                     return (
                         <group key={`${r}-${c}`} position={[x, 0.01, z]}>
-                             {/* Sidewalk */}
                              <mesh rotation={[-Math.PI/2, 0, 0]} position={[0, 0, 0]} receiveShadow>
                                 <planeGeometry args={[sidewalkSize, sidewalkSize]} />
-                                <meshStandardMaterial color="#94a3b8" roughness={0.6} /> {/* Light Gray Concrete */}
+                                <meshStandardMaterial color="#94a3b8" roughness={0.6} /> 
                              </mesh>
-                             {/* Grass */}
                              <mesh rotation={[-Math.PI/2, 0, 0]} position={[0, 0.02, 0]} receiveShadow>
                                 <planeGeometry args={[blockSize, blockSize]} />
-                                <meshStandardMaterial color="#4ade80" roughness={1} /> {/* Vibrant Grass */}
+                                <meshStandardMaterial color="#4ade80" roughness={1} /> 
                              </mesh>
                         </group>
                     )
@@ -278,15 +266,15 @@ const CityTerrain: React.FC = () => {
     )
 }
 
-export const Scene: React.FC<SceneProps> = ({ onLog, onTimeUpdate }) => {
+// Internal component that runs inside Canvas
+const SceneInner: React.FC<SceneProps & { timeOffset: React.MutableRefObject<number> }> = ({ onLog, onTimeUpdate, warpTrigger, timeOffset }) => {
   const [isNight, setIsNight] = useState(false);
   const [deadHouseIds, setDeadHouseIds] = useState<Set<string>>(new Set());
   
-  // World State (Using State now to support Job Reassignment)
+  // World State
   const [houses, setHouses] = useState<HouseData[]>([]);
   const [stickmen, setStickmen] = useState<StickmanData[]>([]);
   
-  // Static Buildings
   const shopData = useMemo<ShopData>(() => ({
     position: new Vector3(...SHOP_POSITION),
     entryPoint: new Vector3(SHOP_POSITION[0], 0, SHOP_POSITION[2] + 4)
@@ -349,13 +337,21 @@ export const Scene: React.FC<SceneProps> = ({ onLog, onTimeUpdate }) => {
 
   const airportData = useMemo<AirportData>(() => {
       const airportPosVec = new Vector3(...AIRPORT_POSITION);
+      const terminalPos = new Vector3(airportPosVec.x + 15, 0, airportPosVec.z + 10);
+      const checkInPos = terminalPos.clone().add(new Vector3(-4, 0, 6)); 
+      const securityPos = terminalPos.clone().add(new Vector3(4, 0, 4)); 
+      const gatePos = terminalPos.clone().add(new Vector3(0, 0, -4)); 
+      const runwayStart = new Vector3(airportPosVec.x, 0, airportPosVec.z - 20);
+
       return {
         position: airportPosVec,
-        terminalPos: new Vector3(airportPosVec.x + 15, 0, airportPosVec.z + 10),
-        runwayStart: new Vector3(airportPosVec.x, 0, airportPosVec.z - 20)
+        terminalPos,
+        checkInPos,
+        securityPos,
+        gatePos,
+        runwayStart
       }
   }, []);
-
 
   // Initial World Generation
   useEffect(() => {
@@ -379,7 +375,6 @@ export const Scene: React.FC<SceneProps> = ({ onLog, onTimeUpdate }) => {
             const x = startX + c * GRID_SPACING;
             const z = startZ + r * GRID_SPACING;
 
-            // Reserve spots for special buildings
             if (r === 2 && c === 2) continue; // Shop
             if (r === 0 && c === 0) continue; // School
             if (r === 4 && c === 4) continue; // Park
@@ -438,50 +433,40 @@ export const Scene: React.FC<SceneProps> = ({ onLog, onTimeUpdate }) => {
     setStickmen(_stickmen);
   }, []);
 
-  // Street Lights Generation
   const streetLights = useMemo(() => {
     const lights: Vector3[] = [];
     const startX = -((GRID_COLS - 1) * GRID_SPACING) / 2;
     const startZ = -((GRID_ROWS - 1) * GRID_SPACING) / 2;
-    
-    // Add lights at intersections but offset slightly
     for (let r = 0; r < GRID_ROWS; r++) {
         for (let c = 0; c < GRID_COLS; c++) {
             const x = startX + c * GRID_SPACING;
             const z = startZ + r * GRID_SPACING;
-            // Place light at street corner (approx midway between grid centers)
             lights.push(new Vector3(x + GRID_SPACING/2, 0, z + GRID_SPACING/2));
         }
     }
     return lights;
   }, []);
 
-  
-  // Travel State
   const [travelState, setTravelState] = useState<TravelState>({
       status: 'IDLE',
       travelerHouseId: null,
-      flightProgress: 0
+      flightProgress: 0,
+      daysAway: 0
   });
 
   const handleMinuteChange = (minute: number) => {
-      // TRAVEL LOGIC
-      // Minute 2: Boarding Call (Select Family)
       if (minute === 2) {
-          if (travelState.status === 'IDLE' || travelState.status === 'RETURNING' || travelState.status === 'CRASHED') {
-             // Find valid houses (not dead)
+          if (travelState.status === 'IDLE') {
              const validHouses = houses.filter(h => !deadHouseIds.has(h.id));
              if (validHouses.length > 0) {
                  const randomHouse = validHouses[Math.floor(Math.random() * validHouses.length)];
                  onLog(`Family from ${randomHouse.id} is heading to the airport!`, 'normal');
                  
-                 // --- JOB REASSIGNMENT LOGIC ---
                  const travelerParent = stickmen.find(s => s.homeId === randomHouse.id && s.role === 'PARENT');
                  if (travelerParent && travelerParent.job) {
                      const jobToReassign = travelerParent.job;
                      onLog(`Alert: ${travelerParent.job} is going on vacation. Finding replacement...`, 'alert');
 
-                     // Find replacement (Parent, no job, not traveling, not dead)
                      const candidates = stickmen.filter(s => 
                         s.role === 'PARENT' && 
                         !s.job && 
@@ -493,7 +478,6 @@ export const Scene: React.FC<SceneProps> = ({ onLog, onTimeUpdate }) => {
                          const replacement = candidates[Math.floor(Math.random() * candidates.length)];
                          onLog(`Hired ${replacement.id} as new ${jobToReassign}.`, 'normal');
                          
-                         // Update Stickmen State
                          setStickmen(prev => prev.map(s => {
                              if (s.id === travelerParent.id) return { ...s, job: undefined };
                              if (s.id === replacement.id) return { ...s, job: jobToReassign };
@@ -507,22 +491,20 @@ export const Scene: React.FC<SceneProps> = ({ onLog, onTimeUpdate }) => {
                          }));
                      }
                  }
-                 // -----------------------------
 
                  setTravelState({
                      status: 'BOARDING',
                      travelerHouseId: randomHouse.id,
-                     flightProgress: 0
+                     flightProgress: 0,
+                     daysAway: 0
                  });
              }
           }
       }
       
-      // Minute 3: Take Off
       if (minute === 3) {
           if (travelState.status === 'BOARDING') {
-              // 25% Crash Chance (Updated from 5%)
-              const crashed = Math.random() < 0.25;
+              const crashed = Math.random() < 0.75; // 75% Crash Chance
               if (crashed) {
                   onLog("BREAKING NEWS: A plane has crashed! There are no survivors.", "alert");
                   setTravelState(prev => ({ ...prev, status: 'CRASHED' }));
@@ -534,40 +516,42 @@ export const Scene: React.FC<SceneProps> = ({ onLog, onTimeUpdate }) => {
           }
       }
 
-      // Minute 1: Landing (Return)
       if (minute === 1) {
           if (travelState.status === 'AWAY') {
-              onLog("Flight 747 has landed. Welcome home!", "normal");
-              setTravelState(prev => ({ ...prev, status: 'RETURNING' }));
-              
-              // After a delay, reset to IDLE so they are picked up next time or logic resets
-              setTimeout(() => {
-                  setTravelState({ status: 'IDLE', travelerHouseId: null, flightProgress: 0 });
-              }, 10000); 
+              const newDays = travelState.daysAway + 1;
+              if (newDays >= 2) {
+                  onLog("Flight 747 has landed. Welcome home!", "normal");
+                  setTravelState(prev => ({ ...prev, status: 'RETURNING', daysAway: newDays }));
+                  setTimeout(() => {
+                      setTravelState({ status: 'IDLE', travelerHouseId: null, flightProgress: 0, daysAway: 0 });
+                  }, 10000);
+              } else {
+                  setTravelState(prev => ({ ...prev, daysAway: newDays }));
+                  onLog(`Travel Update: Family is enjoying day ${newDays} of vacation.`, 'normal');
+              }
           }
       }
   };
 
   return (
-    <Canvas shadows camera={{ position: [0, 60, 80], fov: 45 }}>
+    <>
       <EnvironmentController 
         onTimeChange={setIsNight} 
         onTimeUpdate={onTimeUpdate} 
         onMinuteChange={handleMinuteChange}
+        warpTrigger={warpTrigger}
+        timeOffset={timeOffset}
       />
       <CameraRig />
 
-      {/* City Terrain (Roads and Grass) */}
       <CityTerrain />
 
-      {/* Street Lights */}
       {streetLights.map((pos, i) => (
           <group key={`sl-${i}`} position={[pos.x, 0, pos.z]}>
               <StreetLight isNight={isNight} />
           </group>
       ))}
 
-      {/* Buildings */}
       <IceCreamShop />
       <group position={[schoolData.position.x, 0, schoolData.position.z]}>
          <School />
@@ -593,9 +577,7 @@ export const Scene: React.FC<SceneProps> = ({ onLog, onTimeUpdate }) => {
       ))}
 
       {stickmen.map(sm => {
-         // Filter out dead stickmen
          if (deadHouseIds.has(sm.homeId)) return null;
-
          const home = houses.find(h => h.id === sm.homeId)!;
          return (
             <Stickman 
@@ -603,7 +585,7 @@ export const Scene: React.FC<SceneProps> = ({ onLog, onTimeUpdate }) => {
                 {...sm} 
                 home={home} 
                 shop={shopData} 
-                school={schoolData}
+                school={schoolData} 
                 park={parkData}
                 store={storeData}
                 beach={beachData}
@@ -612,9 +594,22 @@ export const Scene: React.FC<SceneProps> = ({ onLog, onTimeUpdate }) => {
                 isNight={isNight}
                 travelState={travelState}
                 onLog={onLog} 
+                timeOffset={timeOffset}
             />
          );
       })}
-    </Canvas>
+    </>
   );
 };
+
+// --- MAIN WRAPPER ---
+export const Scene: React.FC<SceneProps> = (props) => {
+    // We lift the ref up here to ensure it persists across Canvas remounts if any
+    const timeOffset = useRef(0);
+    
+    return (
+        <Canvas shadows camera={{ position: [0, 60, 80], fov: 45 }}>
+            <SceneInner {...props} timeOffset={timeOffset} />
+        </Canvas>
+    );
+}

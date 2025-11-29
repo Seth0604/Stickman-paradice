@@ -6,6 +6,7 @@ import { LogEntry } from './types';
 function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [timeData, setTimeData] = useState({ time: "Minute 1", task: "Free Time" });
+  const [warpTrigger, setWarpTrigger] = useState<{ minute: number, id: number } | null>(null);
 
   const addLog = useCallback((message: string, type: 'normal' | 'alert' = 'normal') => {
     setLogs(prev => [
@@ -18,11 +19,16 @@ function App() {
       setTimeData({ time, task });
   }, []);
 
+  const handleWarp = (minute: number) => {
+      setWarpTrigger({ minute, id: Date.now() });
+      addLog(`Warping to Minute ${minute}...`, 'normal');
+  };
+
   return (
     <div className="w-full h-screen bg-black relative overflow-hidden font-sans">
       {/* 3D Viewport */}
       <div className="absolute inset-0 z-0">
-        <Scene onLog={addLog} onTimeUpdate={handleTimeUpdate} />
+        <Scene onLog={addLog} onTimeUpdate={handleTimeUpdate} warpTrigger={warpTrigger} />
       </div>
 
       {/* UI Overlay */}
@@ -58,6 +64,24 @@ function App() {
              <li>👨‍👩‍👦 Population: 50 Residents</li>
            </ul>
         </div>
+      </div>
+
+      {/* Time Warp Controls */}
+      <div className="absolute bottom-4 right-4 z-10 pointer-events-auto">
+          <div className="bg-black/60 backdrop-blur-md p-4 rounded-xl shadow-2xl border border-white/10">
+              <h3 className="text-white font-bold mb-3 text-center text-sm uppercase tracking-wider">Time Warp</h3>
+              <div className="grid grid-cols-3 gap-2">
+                  {[1, 2, 3, 4, 5, 6].map(m => (
+                      <button 
+                        key={m}
+                        onClick={() => handleWarp(m)}
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-4 rounded shadow transition-transform active:scale-95 text-xs"
+                      >
+                          Min {m}
+                      </button>
+                  ))}
+              </div>
+          </div>
       </div>
 
       {/* Event Feed (Right Side) */}
