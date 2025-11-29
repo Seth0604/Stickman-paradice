@@ -521,8 +521,8 @@ export const Scene: React.FC<SceneProps> = ({ onLog, onTimeUpdate }) => {
       // Minute 3: Take Off
       if (minute === 3) {
           if (travelState.status === 'BOARDING') {
-              // 5% Crash Chance
-              const crashed = Math.random() < 0.05;
+              // 25% Crash Chance (Updated from 5%)
+              const crashed = Math.random() < 0.25;
               if (crashed) {
                   onLog("BREAKING NEWS: A plane has crashed! There are no survivors.", "alert");
                   setTravelState(prev => ({ ...prev, status: 'CRASHED' }));
