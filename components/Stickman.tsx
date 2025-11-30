@@ -1,10 +1,11 @@
 
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Vector3, Group, MathUtils } from 'three';
+import { Vector3, Group, MathUtils, Mesh } from 'three';
 import { Html } from '@react-three/drei';
-import { ActionState, HouseData, Role, ShopData, SchoolData, ParkData, StoreData, BeachData, ArcadeData, AirportData, TravelState } from '../types';
+import { ActionState, HouseData, Role, ShopData, SchoolData, ParkData, StoreData, BeachData, ArcadeData, AirportData, TravelState, CoasterState, RollercoasterData, HospitalData } from '../types';
 import { getSchoolDeskPosition } from './School';
+import { ISLAND_POSITION, HEAVEN_POSITION, VOLCANO_POSITION } from '../constants';
 
 interface StickmanProps {
   id: string;
@@ -18,18 +19,32 @@ interface StickmanProps {
   beach: BeachData;
   arcade: ArcadeData;
   airport: AirportData;
+  hospitalData: HospitalData;
+  coasterData: RollercoasterData;
+  coasterRef: React.MutableRefObject<CoasterState>;
   isNight: boolean;
-  job?: 'TEACHER' | 'CASHIER';
+  job?: 'TEACHER' | 'CASHIER' | 'DOCTOR';
   travelState: TravelState;
-  onLog: (msg: string, type: 'normal' | 'alert') => void;
+  onLog: (msg: string, type: 'normal' | 'alert' | 'success') => void;
   timeOffset: React.MutableRefObject<number>;
+  isDead?: boolean;
+  onDie: (homeId: string) => void;
+  // Health
+  status?: ActionState; 
+  hasWheelchair?: boolean;
+  missingArms?: boolean;
+  daysUntilDeath?: number;
+  hospitalBedIndex?: number;
 }
 
 const WALK_SPEED_PARENT = 0.05;
 const WALK_SPEED_CHILD = 0.12; 
 
-export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop, school, park, store, beach, arcade, airport, isNight, job, travelState, onLog, timeOffset }) => {
+export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop, school, park, store, beach, arcade, airport, hospitalData, coasterData, coasterRef, isNight, job, travelState, onLog, timeOffset, isDead, onDie, status: overrideStatus, hasWheelchair, missingArms, daysUntilDeath, hospitalBedIndex }) => {
   const group = useRef<Group>(null);
+  // Wheel Refs
+  const wheelL = useRef<Mesh>(null);
+  const wheelR = useRef<Mesh>(null);
   
   // State
   const [state, setState] = useState<ActionState>(ActionState.IDLE);
@@ -39,6 +54,14 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
   const [hasToy, setHasToy] = useState(false);
   const [waitTimer, setWaitTimer] = useState(0);
   
+  // Apply override status (like IN_HOSPITAL) from parent if present
+  useEffect(() => {
+      if (overrideStatus) {
+          setState(overrideStatus);
+          setTarget(null);
+      }
+  }, [overrideStatus]);
+
   // Travel Sub-state
   const [travelStep, setTravelStep] = useState(0);
 
@@ -46,14 +69,18 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
   const [checkedNightActivity, setCheckedNightActivity] = useState(false);
 
   // Position management
-  const initialPos = useMemo(() => new Vector3(
-    home.position[0] + (Math.random() * 2 - 1),
-    0,
-    home.position[2] + 4
-  ), [home]);
+  const initialPos = useMemo(() => {
+      if (isDead) return new Vector3(...HEAVEN_POSITION).add(new Vector3((Math.random()-0.5)*20, 5, (Math.random()-0.5)*20));
+      return new Vector3(
+        home.position[0] + (Math.random() * 2 - 1),
+        0,
+        home.position[2] + 4
+      )
+  }, [home, isDead]);
   
   const currentPos = useRef(initialPos.clone());
-  const speed = role === 'CHILD' ? WALK_SPEED_CHILD : WALK_SPEED_PARENT;
+  // Slower speed if wheelchair
+  const speed = hasWheelchair ? 0.03 : (role === 'CHILD' ? WALK_SPEED_CHILD : WALK_SPEED_PARENT);
   const scale = role === 'CHILD' ? 0.6 : 1.0;
 
   // Helper to find the correct bed
@@ -80,6 +107,72 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
     if (waitTimer > 0) {
         setWaitTimer(prev => Math.max(0, prev - delta));
         return; 
+    }
+
+    // --- DEAD LOGIC ---
+    if (isDead) {
+        if (state !== ActionState.FLOATING) {
+            setState(ActionState.FLOATING);
+            setTarget(null);
+            // Teleport to heaven range
+            const heavenBase = new Vector3(...HEAVEN_POSITION);
+            currentPos.current.copy(heavenBase.add(new Vector3((Math.random()-0.5)*30, 5 + Math.random()*5, (Math.random()-0.5)*30)));
+        }
+        return;
+    }
+
+    // --- BURNING LOGIC ---
+    if (state === ActionState.BURNING) {
+        // Sacrifice to volcano
+        if (!target) {
+            const volcanoBase = new Vector3(...VOLCANO_POSITION);
+            currentPos.current.copy(volcanoBase.add(new Vector3(0, 15, 0))); // Top of volcano
+            setTarget(null);
+            
+            // Die after 3 seconds
+            setTimeout(() => {
+                onDie(home.id);
+            }, 3000);
+        }
+        return;
+    }
+
+    if (state === ActionState.IN_AMBULANCE) {
+        return; // Handled by Ambulance component (invisible)
+    }
+
+    if (state === ActionState.WAITING_FOR_AMBULANCE) {
+        // Just lie there
+        return;
+    }
+    
+    // --- HOSPITALIZED LOGIC ---
+    if (state === ActionState.IN_HOSPITAL) {
+        // Go to hospital bed and stay there
+        // Pick specific bed based on ID or index
+        const bedIndex = (hospitalBedIndex !== undefined) ? hospitalBedIndex : 0;
+        const safeBedIndex = bedIndex % hospitalData.beds.length;
+        const bed = hospitalData.beds[safeBedIndex];
+        
+        // Snap to position
+        if (bed) {
+            const targetPos = bed.clone();
+            // Adjust for visual alignment (beds are centered, stickman pivot is feet)
+            // Set X to bed position. 
+            // Z needs +1.4 offset to align head with pillow (since bed center is at feet approx)
+            currentPos.current.x = targetPos.x;
+            currentPos.current.z = targetPos.z + 1.4;
+        }
+        
+        return; // Do nothing else
+    }
+
+    // --- RIDE CRASH CHECK ---
+    if (state === ActionState.RIDING_COASTER || state === ActionState.WAITING_FOR_RIDE) {
+        if (coasterRef.current.status === 'CRASHED' && coasterRef.current.riderIds.includes(id)) {
+            // Logic handled by parent callback, which sets overrideStatus/isDead
+            return;
+        }
     }
 
     // --- TRAVEL LOGIC (Override everything if selected) ---
@@ -109,13 +202,17 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
             }
         }
         else if (travelState.status === 'AWAY') {
-             if (state !== ActionState.FLYING) {
-                 setState(ActionState.FLYING);
+             if (state !== ActionState.RELAXING) {
+                 setState(ActionState.RELAXING);
                  setTarget(null);
+                 // Teleport to Island
+                 const islandBase = new Vector3(...ISLAND_POSITION);
+                 // Random spot on island
+                 currentPos.current.copy(islandBase.add(new Vector3((Math.random()-0.5)*30, 1.5, (Math.random()-0.5)*30)));
              }
         }
         else if (travelState.status === 'RETURNING') {
-             if (state === ActionState.FLYING) {
+             if (state === ActionState.RELAXING || state === ActionState.FLYING) {
                  // Teleport to Terminal Exit
                  currentPos.current.copy(airport.terminalPos.clone().add(new Vector3(0,0,10)));
                  setState(ActionState.IDLE);
@@ -124,24 +221,20 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
                  setState(ActionState.WALKING);
              }
         }
-        else if (travelState.status === 'CRASHED') {
-             // Logic handled by Scene unmounting this component, but if we persist:
-             setState(ActionState.CRASHED);
-        }
-
-        if (state === ActionState.WAITING_FOR_FLIGHT || state === ActionState.FLYING) return;
+        
+        if (state === ActionState.WAITING_FOR_FLIGHT || state === ActionState.FLYING || state === ActionState.RELAXING) return;
     }
 
 
     // --- PARENT LOGIC ---
     if (role === 'PARENT') {
         
-        // JOB LOGIC
+        // JOB LOGIC (Only if not incapacitated)
         if (job) {
              const isWorkTime = cycleTime >= 60 && cycleTime < 300; // Work all day (Min 2-5)
              
              if (isWorkTime) {
-                 if (state !== ActionState.TEACHING && state !== ActionState.WORKING) {
+                 if (state !== ActionState.TEACHING && state !== ActionState.WORKING && state !== ActionState.TREATING_PATIENT) {
                      if (job === 'TEACHER') {
                         setTarget(school.teacherPos.clone());
                         setState(ActionState.TEACHING);
@@ -150,11 +243,25 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
                         const regPos = store.registers[regIndex] || store.registers[0];
                         setTarget(regPos.clone());
                         setState(ActionState.WORKING);
+                     } else if (job === 'DOCTOR') {
+                        setTarget(hospitalData.receptionPos.clone());
+                        setState(ActionState.TREATING_PATIENT);
                      }
                  }
+                 // Doctor wander logic
+                 if (job === 'DOCTOR' && state === ActionState.TREATING_PATIENT && !target && Math.random() < 0.005) {
+                     // Check on a random bed or return to desk
+                     if (Math.random() < 0.5) {
+                         const randomBed = hospitalData.beds[Math.floor(Math.random() * hospitalData.beds.length)];
+                         setTarget(randomBed.clone().add(new Vector3(0,0,1.5)));
+                     } else {
+                         setTarget(hospitalData.receptionPos.clone());
+                     }
+                 }
+
                  return; 
              } else {
-                 if (state === ActionState.TEACHING || state === ActionState.WORKING) {
+                 if (state === ActionState.TEACHING || state === ActionState.WORKING || state === ActionState.TREATING_PATIENT) {
                      setState(ActionState.IDLE);
                      setTarget(null);
                  }
@@ -242,7 +349,15 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
                      setTarget(machine.clone().add(new Vector3(1, 0, 0))); 
                      setState(ActionState.PLAYING_ARCADE);
                 }
-                else if (rand < 0.06) {
+                // Coaster Logic
+                else if (rand < 0.06 && coasterRef.current.status === 'BOARDING' && coasterRef.current.riderIds.length < 4 && !hasWheelchair) {
+                     // Queue Spot: Offset from entry point
+                     const qX = (Math.random() - 0.5) * 2 + 4; // Right of platform
+                     const qZ = (Math.random()) * 4; 
+                     setTarget(coasterData.entryPoint.clone().add(new Vector3(qX, 0, qZ)));
+                     setState(ActionState.WAITING_FOR_RIDE);
+                }
+                else if (rand < 0.07) {
                     const wanderX = home.position[0] + (Math.random() * 8 - 4);
                     const wanderZ = home.position[2] + (Math.random() * 8 - 4);
                     setTarget(new Vector3(wanderX, 0, wanderZ));
@@ -269,7 +384,7 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
         }
     } 
     else if (phase === 'PARK') {
-        if (state !== ActionState.PLAYING && state !== ActionState.BUILDING_SAND && state !== ActionState.PLAYING_ARCADE) {
+        if (state !== ActionState.PLAYING && state !== ActionState.BUILDING_SAND && state !== ActionState.PLAYING_ARCADE && state !== ActionState.RIDING_COASTER && state !== ActionState.WAITING_FOR_RIDE) {
              const rand = Math.random();
              // 10% Beach
              if (rand < 0.1) {
@@ -329,7 +444,7 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
                  setTarget(null);
             }
 
-            if (!target && state !== ActionState.BUYING && state !== ActionState.EATING && state !== ActionState.SHOPPING && state !== ActionState.BROWSING && state !== ActionState.CHECKOUT && state !== ActionState.PLAYING_ARCADE && state !== ActionState.CHEERING) {
+            if (!target && state !== ActionState.BUYING && state !== ActionState.EATING && state !== ActionState.SHOPPING && state !== ActionState.BROWSING && state !== ActionState.CHECKOUT && state !== ActionState.PLAYING_ARCADE && state !== ActionState.CHEERING && state !== ActionState.WAITING_FOR_RIDE && state !== ActionState.RIDING_COASTER) {
                 const rand = Math.random();
                 
                 // 5% Buy Ice Cream
@@ -351,11 +466,19 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
                      setTarget(spot.clone());
                      setState(ActionState.BUILDING_SAND);
                 }
-                // 40% Arcade
-                else if (rand < 0.65 && !hasToy) {
+                // 30% Arcade
+                else if (rand < 0.55 && !hasToy) {
                     const machine = arcade.clawMachines[Math.floor(Math.random() * arcade.clawMachines.length)];
                     setTarget(machine.clone().add(new Vector3(1, 0, 0))); 
                     setState(ActionState.PLAYING_ARCADE);
+                }
+                // 5% Coaster
+                else if (rand < 0.60 && coasterRef.current.status === 'BOARDING' && coasterRef.current.riderIds.length < 4 && !hasWheelchair) {
+                     // Queue Position
+                     const qX = (Math.random() - 0.5) * 2 + 4; 
+                     const qZ = (Math.random()) * 4; 
+                     setTarget(coasterData.entryPoint.clone().add(new Vector3(qX, 0, qZ)));
+                     setState(ActionState.WAITING_FOR_RIDE);
                 }
                 // Eat Ice Cream
                 else if (hasIceCream) {
@@ -382,20 +505,49 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
   useFrame((stateThree) => {
     if (!group.current) return;
     const time = stateThree.clock.getElapsedTime();
+    let isMoving = false;
 
-    if (state === ActionState.FLYING || state === ActionState.CRASHED) {
+    if (state === ActionState.FLYING || state === ActionState.IN_AMBULANCE) {
         group.current.visible = false;
         return;
     } else {
         group.current.visible = true;
     }
 
+    // --- COASTER MOVEMENT OVERRIDE (MATRIX ALIGNMENT) ---
+    if (state === ActionState.RIDING_COASTER) {
+        // Reset local transforms first
+        group.current.position.set(0,0,0);
+        group.current.rotation.set(0,0,0);
+        group.current.scale.set(scale, scale, scale);
+        
+        // 1. Position at Cart Origin (World Space)
+        group.current.position.setFromMatrixPosition(coasterRef.current.matrix);
+        
+        // 2. Match Cart Rotation
+        group.current.setRotationFromMatrix(coasterRef.current.matrix);
+        
+        // 3. Apply Local Offsets (Relative to Cart)
+        // Move stickman to specific seat
+        const myIndex = coasterRef.current.riderIds.indexOf(id);
+        const seatZ = -1.5 + (myIndex * 1.0);
+        
+        // Translate local to cart
+        group.current.translateZ(seatZ);
+        group.current.translateY(0.5); // Sit height
+        
+        // Rotate 180 to face forward (Cart Z is backwards or tangential?)
+        // If they are misaligned, this flips them
+        group.current.rotateY(Math.PI);
+    }
+
     // Movement
-    if (target) {
+    else if (target) {
         const direction = new Vector3().subVectors(target, currentPos.current);
         const dist = direction.length();
 
         if (dist > 0.2) {
+            isMoving = true;
             direction.normalize().multiplyScalar(speed);
             currentPos.current.add(direction);
             
@@ -437,11 +589,25 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
                 // Multi-step logic handled in useFrame loop logic above via setWaitTimer/setTravelStep
                 setTarget(null);
             }
+            // Coaster Arrival
+            if (state === ActionState.WAITING_FOR_RIDE) {
+                setTarget(null);
+                // Try to join
+                if (coasterRef.current.riderIds.length < 4 && coasterRef.current.status === 'BOARDING') {
+                     coasterRef.current.riderIds.push(id);
+                     setState(ActionState.RIDING_COASTER);
+                } else {
+                     // Full or left, abort
+                     setState(ActionState.IDLE);
+                }
+            }
         }
     }
 
-    // Apply Position
-    group.current.position.copy(currentPos.current);
+    // Apply Position (Unless Riding)
+    if (state !== ActionState.RIDING_COASTER) {
+        group.current.position.copy(currentPos.current);
+    }
 
     // Animation Logic
     const body = group.current.getObjectByName('Body');
@@ -454,25 +620,70 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
     const groceryBag = group.current.getObjectByName('GroceryBag');
     const sandCastle = group.current.getObjectByName('SandCastle');
     const toy = group.current.getObjectByName('Toy');
+    const wheelchair = group.current.getObjectByName('Wheelchair');
 
-    if (body && lLegPivot && rLegPivot && lArmPivot && rArmPivot && head) {
+    if (body && lLegPivot && rLegPivot && lArmPivot && rArmPivot && head && wheelchair) {
+        // Visibility toggles
+        if (missingArms) {
+            lArmPivot.visible = false;
+            rArmPivot.visible = false;
+        } else {
+            lArmPivot.visible = true;
+            rArmPivot.visible = true;
+        }
+        wheelchair.visible = !!hasWheelchair;
+
         // Reset
         lLegPivot.rotation.set(0,0,0);
         rLegPivot.rotation.set(0,0,0);
         lArmPivot.rotation.set(0,0,0);
         rArmPivot.rotation.set(0,0,0);
         head.rotation.set(0,0,0);
-        group.current.rotation.x = 0;
-        group.current.position.y = 0; 
-        
+        // Only reset rotation if not riding (Riding logic handles rotation manually)
+        if(state !== ActionState.RIDING_COASTER) {
+            group.current.rotation.x = 0;
+            group.current.rotation.z = 0;
+        }
+
+        if(state !== ActionState.RIDING_COASTER && !hasWheelchair) group.current.position.y = 0; 
+        if(hasWheelchair) group.current.position.y = 0.5; // Sit in chair
+
         if(iceCream) iceCream.visible = hasIceCream;
         if(groceryBag) groceryBag.visible = hasGroceries;
         if(sandCastle) sandCastle.visible = state === ActionState.BUILDING_SAND;
         if(toy) toy.visible = hasToy;
 
-        const isMoving = target && currentPos.current.distanceTo(target) > 0.2;
-
-        if (state === ActionState.SLEEPING && !isMoving) {
+        if (state === ActionState.FLOATING) {
+             // Dead / Heaven animation
+             group.current.position.y = currentPos.current.y + Math.sin(time * 2) * 0.5;
+             lArmPivot.rotation.z = 2.5; rArmPivot.rotation.z = -2.5;
+             lLegPivot.rotation.x = 0.2; rLegPivot.rotation.x = 0.2;
+        } else if (state === ActionState.BURNING) {
+             // Sacrifice Flail
+             lArmPivot.rotation.z = Math.sin(time * 20) * 2;
+             rArmPivot.rotation.z = Math.cos(time * 20) * 2;
+             group.current.position.y = currentPos.current.y + Math.sin(time * 10) * 0.5;
+        } else if (state === ActionState.IN_HOSPITAL) {
+             // Laying in bed - Ensure position overrides
+             group.current.position.copy(currentPos.current); 
+             
+             group.current.rotation.x = -Math.PI / 2;
+             group.current.position.y = 1.1; // Rest on top of mattress (0.95 high)
+             lArmPivot.rotation.z = 0.2; rArmPivot.rotation.z = -0.2;
+        } else if (state === ActionState.WAITING_FOR_AMBULANCE) {
+             // Laying on ground injured
+             group.current.rotation.x = -Math.PI / 2;
+             group.current.rotation.z = Math.PI / 4;
+             group.current.position.y = 0.2;
+             lArmPivot.rotation.z = 2.5; rArmPivot.rotation.z = -2.5;
+        } else if (state === ActionState.RELAXING) {
+             // Island chilling
+             group.current.rotation.x = -Math.PI / 2;
+             group.current.position.y = 0.5;
+             lArmPivot.rotation.z = 2.8; rArmPivot.rotation.z = -2.8; 
+             lLegPivot.rotation.x = 0.1; rLegPivot.rotation.x = 0.1;
+        }
+        else if (state === ActionState.SLEEPING && !isMoving) {
              const bed = getMyBed();
              const bedRot = bed?.rotation || 0;
              group.current.rotation.y = bedRot;
@@ -521,6 +732,14 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
                  rArmPivot.rotation.x = -1; rArmPivot.rotation.z = -0.5;
              }
 
+        } else if (state === ActionState.RIDING_COASTER) {
+             // Sitting hands up
+             lLegPivot.rotation.x = -Math.PI / 2;
+             rLegPivot.rotation.x = -Math.PI / 2;
+             // Hands up cheering!
+             lArmPivot.rotation.z = 2.5;
+             rArmPivot.rotation.z = -2.5;
+
         } else if ((state === ActionState.TEACHING || state === ActionState.WORKING) && !isMoving) {
              if(job === 'TEACHER') group.current.rotation.y = Math.PI; 
              if(job === 'CASHIER') group.current.rotation.y = Math.PI; 
@@ -559,17 +778,14 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
              lArmPivot.rotation.x = 0;
              rArmPivot.rotation.x = 0;
 
-        } else if (state === ActionState.PLAYING && !isMoving) {
-             const jump = Math.abs(Math.sin(time * 8)) * 0.5;
-             group.current.position.y = jump;
-             lArmPivot.rotation.z = 2.5; rArmPivot.rotation.z = -2.5;
-
         } else if ((state === ActionState.SHOPPING || state === ActionState.CHECKOUT || state === ActionState.TRAVELING) && isMoving) {
              lArmPivot.rotation.x = -0.8;
              rArmPivot.rotation.x = -0.8;
              const walk = Math.sin(time * 10);
-             lLegPivot.rotation.x = walk * 0.6;
-             rLegPivot.rotation.x = -walk * 0.6;
+             if (!hasWheelchair) {
+                 lLegPivot.rotation.x = walk * 0.6;
+                 rLegPivot.rotation.x = -walk * 0.6;
+             }
              if (hasGroceries) {
                  lArmPivot.rotation.x = -0.5; 
                  lArmPivot.rotation.z = 0.2;
@@ -582,17 +798,31 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
         } else if (isMoving) {
              const animSpeed = role === 'CHILD' ? 15 : 10;
              const walk = Math.sin(time * animSpeed);
-             lLegPivot.rotation.x = walk * 0.6;
-             rLegPivot.rotation.x = -walk * 0.6;
+             if (!hasWheelchair) {
+                 lLegPivot.rotation.x = walk * 0.6;
+                 rLegPivot.rotation.x = -walk * 0.6;
+             }
              lArmPivot.rotation.x = -walk * 0.6;
              rArmPivot.rotation.x = walk * 0.6;
              const bounce = Math.abs(Math.sin(time * animSpeed)) * 0.1;
-             group.current.position.y = bounce;
+             if (state !== ActionState.RIDING_COASTER && !hasWheelchair) group.current.position.y = bounce;
              if (hasIceCream) { rArmPivot.rotation.x = -1; rArmPivot.rotation.z = 0; }
              if (hasGroceries) { lArmPivot.rotation.x = -0.5; lArmPivot.rotation.z = 0.2; }
              if (hasToy) {
                  lArmPivot.rotation.x = -1.5; lArmPivot.rotation.z = 0.5;
                  rArmPivot.rotation.x = -1.5; rArmPivot.rotation.z = -0.5;
+             }
+        }
+        
+        // Wheelchair posture
+        if (hasWheelchair) {
+             lLegPivot.rotation.x = -Math.PI / 2.2;
+             rLegPivot.rotation.x = -Math.PI / 2.2;
+             
+             // Animate Wheels
+             if (isMoving && wheelL.current && wheelR.current) {
+                 wheelL.current.rotation.x -= speed * 20; 
+                 wheelR.current.rotation.x -= speed * 20;
              }
         }
     }
@@ -606,14 +836,75 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
 
   return (
     <group ref={group} scale={[scale, scale, scale]}>
+        {/* Wheelchair Mesh */}
+        <group name="Wheelchair" visible={false} position={[0, -0.5, 0]}>
+             <mesh position={[0, 0.5, 0]}>
+                 <boxGeometry args={[0.8, 0.1, 0.8]} />
+                 <meshStandardMaterial color="#333" />
+             </mesh>
+             <mesh position={[0, 0.8, -0.4]}>
+                 <boxGeometry args={[0.8, 0.8, 0.1]} />
+                 <meshStandardMaterial color="#333" />
+             </mesh>
+             
+             {/* Big Wheels Group */}
+             <group>
+                 <mesh ref={wheelL} position={[0.45, 0.4, 0]}>
+                     <group rotation={[0, 0, Math.PI/2]}>
+                        <torusGeometry args={[0.4, 0.05, 8, 16]} />
+                        <meshStandardMaterial color="silver" />
+                        {/* Spokes for visibility of rotation */}
+                        <mesh rotation={[0,0,Math.PI/2]}>
+                            <cylinderGeometry args={[0.02, 0.02, 0.8]} />
+                            <meshStandardMaterial color="black" />
+                        </mesh>
+                        <mesh>
+                            <cylinderGeometry args={[0.02, 0.02, 0.8]} />
+                            <meshStandardMaterial color="black" />
+                        </mesh>
+                     </group>
+                 </mesh>
+                 
+                 <mesh ref={wheelR} position={[-0.45, 0.4, 0]}>
+                     <group rotation={[0, 0, Math.PI/2]}>
+                        <torusGeometry args={[0.4, 0.05, 8, 16]} />
+                        <meshStandardMaterial color="silver" />
+                        {/* Spokes */}
+                        <mesh rotation={[0,0,Math.PI/2]}>
+                            <cylinderGeometry args={[0.02, 0.02, 0.8]} />
+                            <meshStandardMaterial color="black" />
+                        </mesh>
+                        <mesh>
+                            <cylinderGeometry args={[0.02, 0.02, 0.8]} />
+                            <meshStandardMaterial color="black" />
+                        </mesh>
+                     </group>
+                 </mesh>
+             </group>
+        </group>
+
         {/* Head */}
         <mesh name="Head" position={[0, 2.3, 0]} castShadow>
             <sphereGeometry args={[0.25, 16, 16]} />
             <meshStandardMaterial color={color} />
-            {(job === 'TEACHER' || job === 'CASHIER') && (
+            {(job === 'TEACHER' || job === 'CASHIER' || job === 'DOCTOR') && (
                 <mesh position={[0, 0.3, 0]}>
                     <coneGeometry args={[0.15, 0.4, 8]} />
-                    <meshStandardMaterial color={job === 'TEACHER' ? 'blue' : 'green'} />
+                    <meshStandardMaterial color={job === 'TEACHER' ? 'blue' : (job === 'DOCTOR' ? 'white' : 'green')} />
+                </mesh>
+            )}
+            {/* Sunglasses for Relaxing */}
+            {state === ActionState.RELAXING && (
+                <mesh position={[0, 0, 0.2]}>
+                    <boxGeometry args={[0.3, 0.08, 0.1]} />
+                    <meshStandardMaterial color="black" />
+                </mesh>
+            )}
+            {/* Halo for Dead */}
+            {isDead && (
+                <mesh position={[0, 0.5, 0]} rotation={[Math.PI/2, 0, 0]}>
+                    <torusGeometry args={[0.3, 0.05, 8, 16]} />
+                    <meshStandardMaterial color="gold" emissive="gold" emissiveIntensity={1} />
                 </mesh>
             )}
         </mesh>
@@ -622,6 +913,30 @@ export const Stickman: React.FC<StickmanProps> = ({ role, color, id, home, shop,
         <mesh name="Body" position={[0, bodyY, 0]} castShadow>
             <cylinderGeometry args={[0.08, 0.08, 1.5, 8]} />
             <meshStandardMaterial color={color} />
+            {/* Wings for Dead */}
+            {isDead && (
+                <group position={[0, 0.5, -0.1]}>
+                    <mesh position={[-0.4, 0, 0]} rotation={[0, -0.5, 0]}>
+                        <boxGeometry args={[0.6, 0.8, 0.05]} />
+                        <meshStandardMaterial color="white" transparent opacity={0.8} />
+                    </mesh>
+                    <mesh position={[0.4, 0, 0]} rotation={[0, 0.5, 0]}>
+                        <boxGeometry args={[0.6, 0.8, 0.05]} />
+                        <meshStandardMaterial color="white" transparent opacity={0.8} />
+                    </mesh>
+                </group>
+            )}
+            {/* Red Cross for Doctor */}
+            {job === 'DOCTOR' && (
+                <mesh position={[0, 0, 0.06]}>
+                     <boxGeometry args={[0.3, 0.1, 0.02]} />
+                     <meshStandardMaterial color="red" />
+                     <mesh>
+                         <boxGeometry args={[0.1, 0.3, 0.02]} />
+                         <meshStandardMaterial color="red" />
+                     </mesh>
+                </mesh>
+            )}
         </mesh>
 
         <group name="LArmPivot" position={[-0.25, shoulderY, 0]}>

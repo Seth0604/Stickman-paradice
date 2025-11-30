@@ -2,7 +2,11 @@
   "name": "Copy of Stickman Paradise 3D",
   "description": "A bustling 3D metropolis of 50 stickmen living in 25 transparent houses. Watch children buy ice cream, parents relax, and witness the mass grounding of Timmys.",
   "components": [
-    "components/StreetLight.tsx"
+    "components/StreetLight.tsx",
+    "components/Rollercoaster.tsx",
+    "components/Hospital.tsx",
+    "components/Ambulance.tsx",
+    "components/Volcano.tsx"
   ],
   "requestFramePermissions": []
 }

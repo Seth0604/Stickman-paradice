@@ -1,17 +1,21 @@
 
 import React, { useState, useCallback } from 'react';
+import { Vector3 } from 'three';
 import { Scene } from './components/Scene';
 import { LogEntry } from './types';
+import { ISLAND_POSITION, HEAVEN_POSITION } from './constants';
 
 function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [timeData, setTimeData] = useState({ time: "Minute 1", task: "Free Time" });
   const [warpTrigger, setWarpTrigger] = useState<{ minute: number, id: number } | null>(null);
+  const [teleportTarget, setTeleportTarget] = useState<Vector3 | null>(null);
+  const [logsExpanded, setLogsExpanded] = useState(true);
 
-  const addLog = useCallback((message: string, type: 'normal' | 'alert' = 'normal') => {
+  const addLog = useCallback((message: string, type: 'normal' | 'alert' | 'success' = 'normal') => {
     setLogs(prev => [
       { id: Math.random().toString(36), timestamp: Date.now(), message, type },
-      ...prev.slice(0, 9) // Keep last 10
+      ...prev.slice(0, 15) // Keep last 15
     ]);
   }, []);
 
@@ -24,11 +28,17 @@ function App() {
       addLog(`Warping to Minute ${minute}...`, 'normal');
   };
 
+  const handleTeleport = (target: string) => {
+      if (target === 'CITY') setTeleportTarget(new Vector3(0, 0, 0));
+      if (target === 'ISLAND') setTeleportTarget(new Vector3(...ISLAND_POSITION));
+      if (target === 'HEAVEN') setTeleportTarget(new Vector3(...HEAVEN_POSITION));
+  };
+
   return (
     <div className="w-full h-screen bg-black relative overflow-hidden font-sans">
       {/* 3D Viewport */}
       <div className="absolute inset-0 z-0">
-        <Scene onLog={addLog} onTimeUpdate={handleTimeUpdate} warpTrigger={warpTrigger} />
+        <Scene onLog={addLog} onTimeUpdate={handleTimeUpdate} warpTrigger={warpTrigger} teleportTarget={teleportTarget} />
       </div>
 
       {/* UI Overlay */}
@@ -66,6 +76,19 @@ function App() {
         </div>
       </div>
 
+      {/* Teleport Controls */}
+      <div className="absolute top-4 right-1/2 translate-x-1/2 z-10 pointer-events-auto flex gap-2">
+         <button onClick={() => handleTeleport('CITY')} className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-1 px-4 rounded-full text-sm shadow-lg border border-white/20">
+            CITY
+         </button>
+         <button onClick={() => handleTeleport('ISLAND')} className="bg-yellow-500 hover:bg-yellow-400 text-white font-bold py-1 px-4 rounded-full text-sm shadow-lg border border-white/20">
+            ISLAND
+         </button>
+         <button onClick={() => handleTeleport('HEAVEN')} className="bg-white/90 hover:bg-white text-yellow-600 font-bold py-1 px-4 rounded-full text-sm shadow-lg border border-white/20">
+            HEAVEN
+         </button>
+      </div>
+
       {/* Time Warp Controls */}
       <div className="absolute bottom-4 right-4 z-10 pointer-events-auto">
           <div className="bg-black/60 backdrop-blur-md p-4 rounded-xl shadow-2xl border border-white/10">
@@ -85,13 +108,20 @@ function App() {
       </div>
 
       {/* Event Feed (Right Side) */}
-      <div className="absolute top-4 right-4 z-10 w-80 flex flex-col gap-2 pointer-events-none">
-        {logs.map(log => (
+      <div className={`absolute top-16 right-4 z-10 flex flex-col items-end pointer-events-auto transition-all duration-300 ${logsExpanded ? 'w-80' : 'w-10'}`}>
+        <button 
+            onClick={() => setLogsExpanded(!logsExpanded)}
+            className="mb-2 bg-white/20 hover:bg-white/40 text-white font-bold p-2 rounded-full backdrop-blur-md shadow-lg"
+        >
+            {logsExpanded ? '👉' : '👈'}
+        </button>
+        
+        {logsExpanded && logs.map(log => (
             <div 
                 key={log.id} 
                 className={`
-                    p-3 rounded-lg shadow-lg backdrop-blur-md transition-all duration-500 animate-in slide-in-from-right
-                    ${log.type === 'alert' ? 'bg-red-500/90 text-white' : 'bg-white/80 text-gray-800'}
+                    w-full mb-2 p-3 rounded-lg shadow-lg backdrop-blur-md transition-all duration-500 animate-in slide-in-from-right
+                    ${log.type === 'alert' ? 'bg-red-500/90 text-white' : (log.type === 'success' ? 'bg-green-500/90 text-white' : 'bg-white/80 text-gray-800')}
                 `}
             >
                 <div className="text-xs opacity-70 mb-1">

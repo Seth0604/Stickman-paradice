@@ -1,5 +1,5 @@
 
-import { Vector3 } from 'three';
+import { Vector3, Matrix4 } from 'three';
 
 export enum ActionState {
   IDLE = 'IDLE',
@@ -23,7 +23,16 @@ export enum ActionState {
   TRAVELING = 'TRAVELING',
   WAITING_FOR_FLIGHT = 'WAITING_FOR_FLIGHT',
   FLYING = 'FLYING',
-  CRASHED = 'CRASHED'
+  CRASHED = 'CRASHED',
+  RELAXING = 'RELAXING', // Vacation
+  FLOATING = 'FLOATING', // Heaven
+  WAITING_FOR_RIDE = 'WAITING_FOR_RIDE',
+  RIDING_COASTER = 'RIDING_COASTER',
+  IN_HOSPITAL = 'IN_HOSPITAL',
+  TREATING_PATIENT = 'TREATING_PATIENT',
+  WAITING_FOR_AMBULANCE = 'WAITING_FOR_AMBULANCE',
+  IN_AMBULANCE = 'IN_AMBULANCE',
+  BURNING = 'BURNING' // Sacrificed to Volcano
 }
 
 export type Role = 'PARENT' | 'CHILD';
@@ -85,19 +94,37 @@ export interface AirportData {
   runwayStart: Vector3;
 }
 
+export interface RollercoasterData {
+  position: Vector3;
+  entryPoint: Vector3;
+}
+
+export interface HospitalData {
+  position: Vector3;
+  entryPoint: Vector3;
+  beds: Vector3[];
+  receptionPos: Vector3;
+}
+
 export interface StickmanData {
   id: string;
   role: Role;
   color: string;
   homeId: string;
-  job?: 'TEACHER' | 'CASHIER';
+  job?: 'TEACHER' | 'CASHIER' | 'DOCTOR';
+  // Health Flags
+  status?: ActionState; // Override state from scene level
+  hospitalBedIndex?: number; // Assigned bed when in hospital
+  hasWheelchair?: boolean;
+  missingArms?: boolean;
+  daysUntilDeath?: number; // If > 0, they will die in X days
 }
 
 export interface LogEntry {
   id: string;
   timestamp: number;
   message: string;
-  type: 'normal' | 'alert';
+  type: 'normal' | 'alert' | 'success';
 }
 
 export interface TravelState {
@@ -105,4 +132,19 @@ export interface TravelState {
     travelerHouseId: string | null;
     flightProgress: number; // 0 to 1 for animation
     daysAway: number;
+}
+
+// Shared state for the rollercoaster logic
+export interface CoasterState {
+  status: 'BOARDING' | 'RUNNING' | 'CRASHED';
+  riderIds: string[];
+  cartPosition: Vector3;
+  cartRotation: number; // Approximate Y rotation
+  matrix: Matrix4;
+}
+
+export interface AmbulanceState {
+  status: 'IDLE' | 'DISPATCHED' | 'LOADING' | 'RETURNING';
+  targetPos: Vector3 | null;
+  patientIds: string[];
 }
